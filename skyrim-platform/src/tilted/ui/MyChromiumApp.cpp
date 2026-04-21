@@ -306,5 +306,54 @@ void MyChromiumApp::RunTasks()
 void MyChromiumApp::OnBeforeCommandLineProcessing(
   const CefString& aProcessType, CefRefPtr<CefCommandLine> aCommandLine)
 {
+  // HDN 2026-04-22 [voice-mic-fix]: CEF switches para que getUserMedia()
+  // funcione dentro del overlay sin pedir permiso al usuario. Sin esto
+  // Chromium devuelve "Permission denied" y el chat de voz (LiveKit)
+  // falla al encender el micro (reportado como setMicrophoneEnabled ->
+  // NotAllowedError). Se aplican a TODOS los procesos de CEF (empty
+  // aProcessType = browser process; renderers/GPU también los reciben).
+  if (!aCommandLine) {
+    return;
+  }
+
+  // Habilita la API MediaStream (getUserMedia) — necesaria para que
+  // navigator.mediaDevices.getUserMedia esté expuesto.
+  if (!aCommandLine->HasSwitch("enable-media-stream")) {
+    aCommandLine->AppendSwitch("enable-media-stream");
+  }
+  // Auto-aceptar las peticiones de captura de micro y cámara. Este flag
+  // es clave: sin él, CEF muestra un diálogo que no tenemos UI para
+  // responder (el overlay es fullscreen sobre el juego).
+  if (!aCommandLine->HasSwitch("auto-accept-camera-and-microphone-capture")) {
+    aCommandLine->AppendSwitch("auto-accept-camera-and-microphone-capture");
+  }
+  // Fallback equivalente en versiones CEF más antiguas — usa UI "fake"
+  // que acepta por defecto sin pedir al usuario.
+  if (!aCommandLine->HasSwitch("use-fake-ui-for-media-stream")) {
+    aCommandLine->AppendSwitch("use-fake-ui-for-media-stream");
+  }
+  // Autoplay sin gesture del usuario: remotes de LiveKit empiezan a sonar
+  // en cuanto un peer se conecta al room, sin requerir click.
+  if (!aCommandLine->HasSwitch("autoplay-policy")) {
+    aCommandLine->AppendSwitchWithValue("autoplay-policy",
+                                        "no-user-gesture-required");
+  }
+  // El overlay se carga desde file:///Data/Platform/UI/... y luego
+  // incluye assets embebidos. Chromium modernos desconfían de file://
+  // origins con mixed content; permitirlo.
+  if (!aCommandLine->HasSwitch("allow-running-insecure-content")) {
+    aCommandLine->AppendSwitch("allow-running-insecure-content");
+  }
+  // Trata file:// como secure context (requerido por getUserMedia en
+  // algunas builds). Sin esto, Chromium bloquea la API.
+  if (!aCommandLine->HasSwitch("allow-file-access-from-files")) {
+    aCommandLine->AppendSwitch("allow-file-access-from-files");
+  }
+  // Deshabilita la comprobación de "site engagement" que en algunos
+  // Chromium pide un umbral de interacción antes de permitir micro.
+  if (!aCommandLine->HasSwitch("disable-features")) {
+    aCommandLine->AppendSwitchWithValue("disable-features",
+                                        "MediaRouter,AudioServiceSandbox");
+  }
 }
 }
