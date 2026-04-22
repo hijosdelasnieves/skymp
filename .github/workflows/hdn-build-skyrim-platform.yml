@@ -147,16 +147,24 @@ jobs:
           }
           Write-Host "OK: $((Get-Item $dll).Length) bytes"
 
-      # HDN 2026-04-22 [real-talk-icon]: generar HdnIcons.spritefont con un
-      # glifo de altavoz real (Font Awesome 6 Free Solid, SIL OFL). El
-      # DX11RenderHandler del fork escanea Data/Platform/Fonts/ y registra
-      # cualquier .spritefont, así que basta con dejarlo en esa ruta para
-      # que el TextApi pueda usarlo via `createText(x,y,"\uF028",...,"HdnIcons")`.
+      # HDN 2026-04-22 [real-talk-icon v2]: generar HdnIcons.spritefont con
+      # glifos Fluent Design. Usamos `Segoe MDL2 Assets`, que viene ya
+      # instalada de serie en Windows Server 2022 (todo Windows 10+), asi
+      # que no hay que descargar ni registrar nada — pasa directo por
+      # System.Drawing.FontFamily("Segoe MDL2 Assets") en MakeSpriteFont.
       #
-      # Usamos MakeSpriteFont.exe oficial de DirectXTK (toolchain estandar
-      # para generar spritefonts SE compatibles). La fuente Font Awesome es
-      # SIL OFL → libre de redistribuir dentro del cliente.
-      - name: Build HdnIcons.spritefont (Font Awesome speaker/mic)
+      # El DX11RenderHandler del fork escanea Data/Platform/Fonts/ y
+      # registra cualquier .spritefont, asi que basta con dejarlo ahi para
+      # que TextApi pueda usarlo: `createText(x,y,"\uE767",...,"HdnIcons")`.
+      #
+      # Codepoints MDL2 que nos interesan:
+      #   0xE767 = Volume (altavoz con ondas) ← PTT activo
+      #   0xE720 = Microphone
+      #   0xE74F = Mute (altavoz tachado)
+      # Empaquetamos ese rango PUA E700-E7FF con margen para futuros iconos
+      # (map, hammer, bag...) sin tener que regenerar la fuente por cada
+      # icono nuevo.
+      - name: Build HdnIcons.spritefont (Segoe MDL2 - speaker/mic/mute)
         shell: pwsh
         run: |
           $fontsDir = "build/dist/client/Data/Platform/Fonts"
@@ -165,37 +173,25 @@ jobs:
           }
 
           # Herramienta oficial DirectXTK (binario firmado, latest release).
-          # https://github.com/microsoft/DirectXTK/wiki/MakeSpriteFont
           $toolUrl = "https://github.com/microsoft/DirectXTK/releases/latest/download/MakeSpriteFont.exe"
           Invoke-WebRequest -UseBasicParsing -Uri $toolUrl -OutFile MakeSpriteFont.exe
 
-          # Font Awesome 6 Free Solid - glifos de iconos vectoriales.
-          # Licencia SIL OFL 1.1, codepoints en PUA 0xF000-0xF8FF.
-          # 0xF028 = fa-volume-up (altavoz con 2 ondas)
-          # 0xF130 = fa-microphone
-          $faUrl = "https://github.com/FortAwesome/Font-Awesome/raw/6.x/webfonts/fa-solid-900.ttf"
-          Invoke-WebRequest -UseBasicParsing -Uri $faUrl -OutFile fa-solid.ttf
+          # Verify Segoe MDL2 Assets is available on the runner (ships with
+          # Windows Server 2022, but fail loud if Microsoft ever removes it).
+          $hasMdl2 = Test-Path "$env:windir\Fonts\segmdl2.ttf"
+          if (-not $hasMdl2) {
+            Write-Error "Segoe MDL2 Assets (segmdl2.ttf) not found on runner. Cannot build HdnIcons.spritefont."
+            exit 1
+          }
+          Write-Host "Segoe MDL2 Assets found at $env:windir\Fonts\segmdl2.ttf"
 
-          # MakeSpriteFont usa System.Drawing.PrivateFontCollection vía nombre
-          # de familia, por lo que necesita la fuente INSTALADA en Windows.
-          # Sin esto falla con "Property can not be found on this object"
-          # (conocido: https://stackoverflow.com/questions/78969808/). La
-          # instalamos a nivel de sistema registrándola en el registry + Fonts.
-          $ttfSrc = (Resolve-Path fa-solid.ttf).Path
-          $ttfDst = Join-Path $env:windir "Fonts\fa-solid-900.ttf"
-          Copy-Item $ttfSrc $ttfDst -Force
-          $regKey = "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Fonts"
-          New-ItemProperty -Path $regKey -Name "Font Awesome 6 Free Solid (TrueType)" `
-            -Value "fa-solid-900.ttf" -PropertyType String -Force | Out-Null
-
-          # 32px da un bitmap nítido a nuestra escala (0.55 en runtime → ~17px).
-          # /Sharp desactiva antialias gamma para que el glifo no se vea
-          # borroso sobre el skybox oscuro.
-          & .\MakeSpriteFont.exe fa-solid-900.ttf "$fontsDir/HdnIcons.spritefont" `
+          # FontSize:32 bitmap → a size=0.55 runtime ≈ 17px en pantalla.
+          # /Sharp evita antialias gamma que haría el glifo borroso sobre
+          # skybox nocturno. /FontStyle:Regular (MDL2 solo tiene Regular).
+          & .\MakeSpriteFont.exe "Segoe MDL2 Assets" "$fontsDir/HdnIcons.spritefont" `
             /FontSize:32 `
-            /CharacterRegion:0xF028-0xF028 `
-            /CharacterRegion:0xF130-0xF131 `
-            /DefaultCharacter:0xF028 `
+            /CharacterRegion:0xE700-0xE7FF `
+            /DefaultCharacter:0xE767 `
             /Sharp
           if ($LASTEXITCODE -ne 0) { Write-Error "MakeSpriteFont failed"; exit 1 }
 
