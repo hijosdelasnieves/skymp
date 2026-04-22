@@ -76,6 +76,45 @@ jobs:
           & $nuget setapikey "${{ secrets.GITHUB_TOKEN }}" `
             -Source "https://nuget.pkg.github.com/${{ github.repository_owner }}/index.json"
 
+      # HDN 2026-04-22 [build-speedup]: cache del árbol vcpkg_installed entre
+      # runs. El fingerprint es el hash de vcpkg.json + vcpkg-configuration.json;
+      # mientras no cambien las deps, reusamos 100% (ahorra ~15-20 min de
+      # compilación de CEF, MongoDB C driver, spdlog, simdjson…).
+      # restore-keys permite usar el cache aunque el fingerprint haya cambiado
+      # (MSBuild se encargará de recompilar lo que haga falta).
+      - name: Cache vcpkg_installed
+        id: cache-vcpkg
+        uses: actions/cache@v4
+        with:
+          path: |
+            build/vcpkg_installed
+          key: sp-vcpkg-${{ runner.os }}-${{ hashFiles('vcpkg.json', 'vcpkg-configuration.json', '**/vcpkg.json') }}
+          restore-keys: |
+            sp-vcpkg-${{ runner.os }}-
+
+      # HDN 2026-04-22 [build-speedup]: cache del árbol de build MSBuild.
+      # Key por SHA para hits perfectos en reruns, restore-keys en cascada
+      # para reusar el tree de commits anteriores y hacer build incremental.
+      # Esperado: un cambio sólo en un .cpp = recompila ese obj y linka,
+      # no recompila 500 archivos (~5-10 min de ahorro).
+      - name: Cache build tree (MSBuild incremental)
+        id: cache-buildtree
+        uses: actions/cache@v4
+        with:
+          path: |
+            build/CMakeFiles
+            build/CMakeCache.txt
+            build/_deps
+            build/skyrim-platform
+            build/skymp5-server
+            build/skymp5-client
+            build/skymp5-functions-lib
+          key: sp-buildtree-${{ runner.os }}-${{ github.sha }}
+          restore-keys: |
+            sp-buildtree-${{ runner.os }}-${{ github.ref_name }}-
+            sp-buildtree-${{ runner.os }}-main-
+            sp-buildtree-${{ runner.os }}-
+
       - name: Configure CMake (Visual Studio 17 2022)
         shell: pwsh
         run: |
@@ -90,7 +129,12 @@ jobs:
       - name: Build skyrim-platform target (custom yarn pack)
         shell: pwsh
         run: |
-          cmake --build build --config Release --target skyrim-platform
+          # HDN 2026-04-22 [build-speedup]: paralelismo MSBuild. El runner
+          # windows-2022 tiene 4 vCPU. /m:4 + /nr:false evita daemons que
+          # bloquean el cache upload posterior.
+          cmake --build build --config Release --target skyrim-platform `
+            --parallel 4 `
+            -- /m:4 /nr:false
 
       - name: Verify SkyrimPlatform.dll exists
         shell: pwsh
